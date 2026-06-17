@@ -1,0 +1,16 @@
+{
+  "accuracy": 0.9849838895981519,
+  "macro_precision": 0.8822988455627107,
+  "macro_recall": 0.94416912645144,
+  "macro_f1": 0.9066729099165647,
+  "weighted_precision": 0.9866754703274819,
+  "weighted_recall": 0.9849838895981519,
+  "weighted_f1": 0.9855815649590232,
+  "classes": [
+    "Fusion",
+    "Normal",
+    "PVC",
+    "SVEB",
+    "Unknown"
+  ]
+}
