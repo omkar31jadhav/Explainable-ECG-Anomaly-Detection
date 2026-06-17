@@ -11,199 +11,123 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- MOCK BACKEND FUNCTIONS (To be integrated with Person 1's and Person 2's code) ---
+# --- MOCK BACKEND FUNCTIONS ---
 def load_dataset_summary():
-    """Mock dataset summary."""
-    return {
-        "total_series": 1000,
-        "classes": {"Normal": 800, "Anomalous": 200}
-    }
+    return {"total_series": 1000, "classes": {"Normal": 800, "Anomalous": 200}}
 
 def get_model_results():
-    """Mock model evaluation metrics."""
     return {
-        "accuracy": 0.95,
-        "f1_score": 0.92,
+        "accuracy": 0.95, "f1_score": 0.92,
         "epochs": list(range(1, 21)),
         "train_loss": np.linspace(0.8, 0.1, 20) + np.random.normal(0, 0.02, 20),
         "val_loss": np.linspace(0.85, 0.15, 20) + np.random.normal(0, 0.05, 20),
     }
 
-def predict_anomaly(series):
-    """Mock prediction function."""
+def predict_anomaly(series, force_incorrect=False):
     import time
-    time.sleep(1) # simulate inference time
-    score = np.random.uniform(0.7, 0.99) if np.random.rand() > 0.5 else np.random.uniform(0.01, 0.3)
+    time.sleep(0.5) 
+    if force_incorrect:
+        # Simulate a false positive
+        return {"class": "Anomalous", "score": 0.88, "ground_truth": "Normal"}
+    score = np.random.uniform(0.8, 0.99) if np.random.rand() > 0.5 else np.random.uniform(0.01, 0.2)
     is_anomaly = score > 0.5
-    return {"class": "Anomalous" if is_anomaly else "Normal", "score": score}
+    return {"class": "Anomalous" if is_anomaly else "Normal", "score": score, "ground_truth": "Anomalous" if is_anomaly else "Normal"}
 
-def get_explanation(series):
-    """Mock explanation function (e.g., Grad-CAM / SHAP)."""
-    # Simply generate random importance scores for the length of the series
-    return np.clip(np.random.normal(0.5, 0.2, len(series)), 0, 1)
+def get_explanation(series, is_anomalous=False):
+    expl = np.clip(np.random.normal(0.2, 0.1, len(series)), 0, 1)
+    if is_anomalous:
+        expl[len(series)//2:len(series)//2+20] = np.random.uniform(0.7, 1.0, 20)
+    return expl
 
 # --- HELPER FUNCTIONS FOR VISUALIZATION ---
 def generate_dummy_ecg(length=200, anomaly=False):
-    """Generates a dummy ECG-like signal for demonstration."""
     x = np.linspace(0, 4 * np.pi, length)
     base = np.sin(x) + 0.1 * np.random.randn(length)
     if anomaly:
-        # Add a spike
         base[length//2:length//2+10] += 2.0
     return base
 
-def plot_ecg_series(series, title="ECG Signal"):
+def plot_ecg_with_explanation(series, explanation, title="ECG with Local Explanations"):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(y=series, mode='lines', name='Signal'))
-    fig.update_layout(title=title, xaxis_title="Time", yaxis_title="Amplitude",
-                      xaxis=dict(rangeslider=dict(visible=True)))
-    return fig
-
-def plot_ecg_with_explanation(series, explanation, title="ECG with Highlighted Local Explanations"):
-    fig = go.Figure()
-    
-    # Base signal
-    fig.add_trace(go.Scatter(y=series, mode='lines', name='ECG Signal', line=dict(color='blue')))
-    
-    # Colored markers based on explanation score (heatmap overlay logic)
+    fig.add_trace(go.Scatter(y=series, mode='lines', name='ECG Signal', line=dict(color='gray', width=1)))
     fig.add_trace(go.Scatter(
-        y=series,
-        mode='markers',
-        name='Importance',
-        marker=dict(
-            size=8,
-            color=explanation,
-            colorscale='Hot',
-            showscale=True,
-            colorbar=dict(title="Importance Score")
-        )
+        y=series, mode='markers', name='Importance',
+        marker=dict(size=8, color=explanation, colorscale='Reds', showscale=True, colorbar=dict(title="Importance"))
     ))
-    
-    fig.update_layout(title=title, xaxis_title="Time", yaxis_title="Amplitude",
+    fig.update_layout(title=title, xaxis_title="Time", yaxis_title="Amplitude", margin=dict(l=0, r=0, t=30, b=0),
                       xaxis=dict(rangeslider=dict(visible=True)))
     return fig
 
-# --- STREAMLIT UI ---
-st.title("❤️ Explainable ECG Anomaly Detection")
+# --- STREAMLIT UI: CENTRAL DASHBOARD ---
+st.title("❤️ Explainable ECG Anomaly Detection Dashboard")
+st.markdown("A unified view for input selection, model prediction, and explainability.")
 
-# Navigation
-page = st.sidebar.radio(
-    "Navigation",
-    ["Overview", "Model Results", "Live Prediction", "Explanation", "Comparison"]
-)
-
-# 1. Overview Page
-if page == "Overview":
-    st.header("Dataset Overview")
-    st.markdown("Visualizing the big picture: dataset summaries and class distributions.")
-    
+# 1. Dataset & Performance Expander (Keeps layout compact)
+with st.expander("📊 Dataset Overview & Model Performance (Click to expand)", expanded=False):
+    sum_col1, sum_col2, sum_col3 = st.columns(3)
     summary = load_dataset_summary()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total Series Count", summary["total_series"])
-        # Class distribution pie chart
-        df_classes = pd.DataFrame(list(summary["classes"].items()), columns=['Class', 'Count'])
-        fig_pie = px.pie(df_classes, values='Count', names='Class', title="Class Distribution")
-        st.plotly_chart(fig_pie, use_container_width=True)
-        
-    with col2:
-        st.subheader("Typical Time-Series Plot")
-        sample_normal = generate_dummy_ecg()
-        fig_normal = plot_ecg_series(sample_normal, "Typical Normal ECG")
-        st.plotly_chart(fig_normal, use_container_width=True)
-
-# 2. Model Results Page
-elif page == "Model Results":
-    st.header("Model Performance")
-    st.markdown("Training vs validation loss curves and overall accuracy overview.")
-    
     results = get_model_results()
     
-    col1, col2 = st.columns(2)
-    col1.metric("Validation Accuracy", f"{results['accuracy']:.2%}")
-    col2.metric("Validation F1 Score", f"{results['f1_score']:.2f}")
-    
-    st.subheader("Loss Curve")
-    fig_loss = go.Figure()
-    fig_loss.add_trace(go.Scatter(x=results["epochs"], y=results["train_loss"], mode='lines', name='Train Loss'))
-    fig_loss.add_trace(go.Scatter(x=results["epochs"], y=results["val_loss"], mode='lines', name='Validation Loss'))
-    fig_loss.update_layout(xaxis_title="Epoch", yaxis_title="Loss")
-    st.plotly_chart(fig_loss, use_container_width=True)
-    
-    st.info("Additional charts like ROC curves and Confusion Matrices can be integrated here after final model training.")
+    with sum_col1:
+        st.metric("Total Test Series", summary["total_series"])
+        st.metric("Global Accuracy (Test)", f"{results['accuracy']:.2%}")
+    with sum_col2:
+        df_classes = pd.DataFrame(list(summary["classes"].items()), columns=['Class', 'Count'])
+        fig_pie = px.pie(df_classes, values='Count', names='Class', title="Test Layout Distribution", height=200)
+        fig_pie.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig_pie, use_container_width=True)
+    with sum_col3:
+        fig_loss = go.Figure()
+        fig_loss.add_trace(go.Scatter(x=results["epochs"], y=results["val_loss"], mode='lines', name='Val Loss'))
+        fig_loss.update_layout(title="Validation Loss Curve", height=200, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig_loss, use_container_width=True)
 
-# 3. Live Prediction Page
-elif page == "Live Prediction":
-    st.header("Live Prediction")
-    st.markdown("Upload or select a time-series input to see the model's prediction.")
+# 2. Input Selection
+st.subheader("1. Input Instance Selection")
+input_col1, input_col2 = st.columns([1, 2])
+
+with input_col1:
+    scenario = st.radio("Select Scenario:", ["Normal ECG", "Anomalous ECG", "Simulate False Positive (Error)"])
+    if st.button("Generate & Select Instance"):
+        if scenario == "Normal ECG":
+            st.session_state['series'] = generate_dummy_ecg(anomaly=False)
+            st.session_state['is_anomaly'] = False
+            st.session_state['force_err'] = False
+        elif scenario == "Anomalous ECG":
+            st.session_state['series'] = generate_dummy_ecg(anomaly=True)
+            st.session_state['is_anomaly'] = True
+            st.session_state['force_err'] = False
+        else:
+            # Generate a normal signal but force an incorrect prediction
+            st.session_state['series'] = generate_dummy_ecg(anomaly=False)
+            st.session_state['is_anomaly'] = False 
+            st.session_state['force_err'] = True
+
+if 'series' in st.session_state:
+    series = st.session_state['series']
+    force_err = st.session_state['force_err']
     
-    input_type = st.radio("Select Input Source", ["Generate Sample", "Upload CSV"])
-    series = None
+    # 3. Model Prediction
+    st.subheader("2. Model Prediction & Explainability Overlay")
+    prediction = predict_anomaly(series, force_incorrect=force_err)
+    explanation = get_explanation(series, is_anomalous=prediction['class']=="Anomalous")
     
-    if input_type == "Generate Sample":
-        if st.button("Generate Random ECG"):
-            # Randomly pick normal or anomaly
-            is_anomaly = np.random.rand() > 0.5
-            series = generate_dummy_ecg(anomaly=is_anomaly)
-            st.session_state['live_series'] = series
-            st.success("Sample generated!")
-    else:
-        uploaded_file = st.file_uploader("Upload an ECG CSV file (1 column of values)", type=['csv'])
-        if uploaded_file is not None:
-            df = pd.read_csv(uploaded_file)
-            series = df.iloc[:, 0].values
-            st.session_state['live_series'] = series
-            st.success("File uploaded successfully!")
-            
-    if 'live_series' in st.session_state:
-        series = st.session_state['live_series']
-        st.plotly_chart(plot_ecg_series(series, title="Raw ECG Input"), use_container_width=True)
-        
-        if st.button("Run Prediction"):
-            with st.spinner("Analyzing..."):
-                prediction = predict_anomaly(series)
-            
-            if prediction["class"] == "Anomalous":
-                st.error(f"**Prediction: {prediction['class']}** (score={prediction['score']:.2f})")
+    pred_col1, pred_col2 = st.columns([1, 3])
+    
+    with pred_col1:
+        st.markdown(f"**Ground Truth:** {prediction['ground_truth']}")
+        if prediction['class'] == "Anomalous":
+            if force_err:
+                st.error(f"**Prediction: {prediction['class']}** ⚠️ (False Positive)")
             else:
-                st.success(f"**Prediction: {prediction['class']}** (score={prediction['score']:.2f})")
-
-# 4. Explanation Page
-elif page == "Explanation":
-    st.header("Local Explanations")
-    st.markdown("Visualizing which timestamps triggered the anomaly through Grad-CAM or SHAP overlay heatmaps.")
-    
-    if st.button("Load Anomalous Example"):
-        series = generate_dummy_ecg(anomaly=True)
-        st.session_state['expl_series'] = series
-        st.session_state['expl_scores'] = get_explanation(series)
+                st.warning(f"**Prediction: {prediction['class']}**")
+        else:
+            st.success(f"**Prediction: {prediction['class']}**")
+        st.metric("Anomaly Score", f"{prediction['score']:.2f}")
+        st.markdown("_Model confidence is high. Review the explanation on the right to understand why._")
         
-    if 'expl_series' in st.session_state:
-        st.subheader("Explanation Overlay (Zoom/Filter supported)")
-        fig_expl = plot_ecg_with_explanation(st.session_state['expl_series'], st.session_state['expl_scores'])
+    with pred_col2:
+        # 4. Central Visualization
+        fig_expl = plot_ecg_with_explanation(series, explanation, title="Input Signal + Explainability Overlay (Zoom supported)")
         st.plotly_chart(fig_expl, use_container_width=True)
-        st.info("Hover over the points to see the local importance score. Use the range slider below the x-axis to zoom into the anomaly peak.")
 
-# 5. Comparison Page
-elif page == "Comparison":
-    st.header("Comparison: Normal vs. Anomalous")
-    st.markdown("Side-by-side comparison to reinforce understanding of normal vs anomalous patterns.")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Normal Series")
-        normal_series = generate_dummy_ecg(anomaly=False)
-        normal_expl = get_explanation(normal_series)
-        st.plotly_chart(plot_ecg_with_explanation(normal_series, normal_expl, title="Normal"), use_container_width=True)
-        
-    with col2:
-        st.subheader("Anomalous Series")
-        anomaly_series = generate_dummy_ecg(anomaly=True)
-        anomaly_expl = get_explanation(anomaly_series) # Suppose an anomaly is around the middle
-        # Make the explanation spike where the anomaly is
-        anomaly_expl[80:120] = np.random.uniform(0.8, 1.0, 40)
-        
-        st.plotly_chart(plot_ecg_with_explanation(anomaly_series, anomaly_expl, title="Anomalous (Highlighted)"), use_container_width=True)
-        st.markdown("*Notice how the anomaly peak is highlighted here by the high importance scores.*")
