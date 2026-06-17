@@ -1,0 +1,55 @@
+{
+  "model_path": "D:\\Explanable_ECG_Anomaly_Detection\\models\\ecg_cnn.keras",
+  "encoder_path": "D:\\Explanable_ECG_Anomaly_Detection\\models\\label_encoder.joblib",
+  "classes": [
+    "Fusion",
+    "Normal",
+    "PVC",
+    "SVEB",
+    "Unknown"
+  ],
+  "train_examples": 76758,
+  "validation_examples": 16448,
+  "test_examples": 16449,
+  "data_config": {
+    "data_dir": "D:\\Explanable_ECG_Anomaly_Detection\\data",
+    "annotator": "atr",
+    "signal_channel": 0,
+    "samples_before": 100,
+    "samples_after": 100,
+    "normalization": "zscore",
+    "label_scheme": "aami",
+    "include_unknown": true,
+    "standardize_beats": true
+  },
+  "split_config": {
+    "validation_size": 0.15,
+    "test_size": 0.15,
+    "random_state": 42
+  },
+  "model_config": {
+    "input_length": 200,
+    "n_channels": 1,
+    "conv_filters": [
+      32,
+      64
+    ],
+    "kernel_size": 5,
+    "pool_size": 2,
+    "dense_units": 128,
+    "dropout_rate": 0.3,
+    "activation": "relu",
+    "learning_rate": 0.001,
+    "batch_normalization": true
+  },
+  "training_config": {
+    "epochs": 50,
+    "batch_size": 128,
+    "early_stopping_patience": 8,
+    "reduce_lr_patience": 4,
+    "reduce_lr_factor": 0.5,
+    "min_learning_rate": 1e-06,
+    "use_class_weights": true,
+    "random_state": 42
+  }
+}
