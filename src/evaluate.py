@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
 def evaluate_pipeline(args: argparse.Namespace | None = None) -> dict:
     args = args or parse_args()
     label_encoder = load_label_encoder(args.encoder_path)
-    model = load_trained_model(args.model_path)
+    model = load_trained_model(args.model_path, compile=False)
 
     data_config = DataConfig(
         data_dir=args.data_dir,
@@ -151,4 +151,3 @@ def evaluate_predictions(
 
 if __name__ == "__main__":
     evaluate_pipeline()
-

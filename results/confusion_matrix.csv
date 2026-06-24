@@ -1,6 +1,6 @@
 true_label,Fusion,Normal,PVC,SVEB,Unknown
-Fusion,105,7,8,0,0
-Normal,63,13445,28,39,16
-PVC,17,15,1051,2,1
-SVEB,0,39,5,373,0
-Unknown,0,6,1,0,1228
+Fusion,113,3,3,0,1
+Normal,167,12693,102,603,26
+PVC,38,16,1027,4,1
+SVEB,5,33,3,375,1
+Unknown,0,5,3,4,1223

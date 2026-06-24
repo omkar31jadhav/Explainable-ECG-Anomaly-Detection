@@ -1,11 +1,11 @@
               precision    recall  f1-score   support
 
-      Fusion       0.57      0.88      0.69       120
-      Normal       1.00      0.99      0.99     13591
-         PVC       0.96      0.97      0.96      1086
-        SVEB       0.90      0.89      0.90       417
-     Unknown       0.99      0.99      0.99      1235
+      Fusion       0.35      0.94      0.51       120
+      Normal       1.00      0.93      0.96     13591
+         PVC       0.90      0.95      0.92      1086
+        SVEB       0.38      0.90      0.53       417
+     Unknown       0.98      0.99      0.98      1235
 
-    accuracy                           0.98     16449
-   macro avg       0.88      0.94      0.91     16449
-weighted avg       0.99      0.98      0.99     16449
+    accuracy                           0.94     16449
+   macro avg       0.72      0.94      0.78     16449
+weighted avg       0.97      0.94      0.95     16449

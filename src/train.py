@@ -39,6 +39,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-size", type=float, default=SplitConfig.test_size)
     parser.add_argument("--learning-rate", type=float, default=ModelConfig.learning_rate)
     parser.add_argument("--dropout-rate", type=float, default=ModelConfig.dropout_rate)
+    parser.add_argument(
+        "--spatial-dropout-rate",
+        type=float,
+        default=ModelConfig.spatial_dropout_rate,
+    )
+    parser.add_argument("--weight-decay", type=float, default=ModelConfig.weight_decay)
+    parser.add_argument(
+        "--gradient-clip-norm",
+        type=float,
+        default=ModelConfig.gradient_clip_norm,
+    )
     parser.add_argument("--max-records", type=int, default=None)
     parser.add_argument("--no-class-weights", action="store_true")
     parser.add_argument("--cache-dataset", action="store_true")
@@ -65,6 +76,9 @@ def train_pipeline(args: argparse.Namespace | None = None) -> dict:
         input_length=data_config.window_size,
         learning_rate=args.learning_rate,
         dropout_rate=args.dropout_rate,
+        spatial_dropout_rate=args.spatial_dropout_rate,
+        weight_decay=args.weight_decay,
+        gradient_clip_norm=args.gradient_clip_norm,
     )
     training_config = TrainingConfig(
         epochs=args.epochs,
@@ -169,4 +183,3 @@ def _compute_class_weights(y_train: np.ndarray) -> dict[int, float]:
 
 if __name__ == "__main__":
     train_pipeline()
-

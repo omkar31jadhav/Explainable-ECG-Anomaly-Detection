@@ -24,7 +24,11 @@ class ECGPredictor:
         data_config: DataConfig = DataConfig(),
     ) -> None:
         self.data_config = data_config
-        self.model = model if model is not None else load_trained_model(model_path)
+        self.model = (
+            model
+            if model is not None
+            else load_trained_model(model_path, compile=False)
+        )
         self.label_encoder = (
             label_encoder if label_encoder is not None else load_label_encoder(encoder_path)
         )
@@ -90,4 +94,3 @@ def predict_ecg(
 
     predictor = ECGPredictor(model_path=model_path, encoder_path=encoder_path)
     return predictor.predict(heartbeat_signal)
-

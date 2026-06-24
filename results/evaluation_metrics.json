@@ -1,11 +1,11 @@
 {
-  "accuracy": 0.9849838895981519,
-  "macro_precision": 0.8822988455627107,
-  "macro_recall": 0.94416912645144,
-  "macro_f1": 0.9066729099165647,
-  "weighted_precision": 0.9866754703274819,
-  "weighted_recall": 0.9849838895981519,
-  "weighted_f1": 0.9855815649590232,
+  "accuracy": 0.9381117393154599,
+  "macro_precision": 0.7209993348517044,
+  "macro_recall": 0.9421659395819919,
+  "macro_f1": 0.7831093905157058,
+  "weighted_precision": 0.9676748021360198,
+  "weighted_recall": 0.9381117393154599,
+  "weighted_f1": 0.9483869136212156,
   "classes": [
     "Fusion",
     "Normal",

@@ -18,7 +18,7 @@ def load_model_and_encoder(model_path: str, encoder_path: str):
 
     encoder = joblib.load(encoder_path)
     try:
-        model = load_trained_model(model_path)
+        model = load_trained_model(model_path, compile=False)
         return model, encoder
     except Exception:
         # Fall back: build a fresh model with the project's default config.
@@ -47,12 +47,24 @@ def grad_cam_1d(model, input_array: np.ndarray, layer_name: Optional[str] = None
     if input_array.ndim != 3:
         raise ValueError("input_array must have shape (1, T, C)")
 
-    # choose conv layer
+    # Prefer the post-BatchNorm activation map in optimized models. Fall back
+    # to Conv1D for compatibility with older saved models.
     if layer_name is None:
-        conv_layers = [l.name for l in model.layers if l.__class__.__name__ == "Conv1D" or l.name.startswith("conv1d_")]
-        if not conv_layers:
+        activation_layers = [
+            layer.name
+            for layer in model.layers
+            if layer.name.startswith("activation_")
+        ]
+        conv_layers = [
+            layer.name
+            for layer in model.layers
+            if layer.__class__.__name__ == "Conv1D"
+            or layer.name.startswith("conv1d_")
+        ]
+        candidate_layers = activation_layers or conv_layers
+        if not candidate_layers:
             raise ValueError("No Conv1D layers found in model to run Grad-CAM on.")
-        layer_name = conv_layers[-1]
+        layer_name = candidate_layers[-1]
 
     grad_model = tf.keras.models.Model([model.inputs], [model.get_layer(layer_name).output, model.output])
 

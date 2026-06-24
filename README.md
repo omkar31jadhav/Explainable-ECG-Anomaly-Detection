@@ -185,6 +185,10 @@ Dense Layer
 Softmax Output
 ```
 
+The optimized implementation applies activation after batch normalization,
+uses light spatial dropout after each convolutional block, and replaces the
+parameter-heavy flattening step with combined global average/max pooling.
+
 Framework:
 
 * TensorFlow 2.21
@@ -198,11 +202,11 @@ Training Features:
 
 Optimizer:
 
-* Adam
+* AdamW with gradient clipping
 
 Loss Function:
 
-* Categorical Crossentropy
+* Sparse Categorical Crossentropy
 
 ---
 

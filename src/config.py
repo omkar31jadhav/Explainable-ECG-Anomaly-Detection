@@ -141,8 +141,11 @@ class ModelConfig:
     pool_size: int = 2
     dense_units: int = 128
     dropout_rate: float = 0.3
+    spatial_dropout_rate: float = 0.1
     activation: str = "relu"
     learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    gradient_clip_norm: float = 1.0
     batch_normalization: bool = True
 
 
@@ -158,4 +161,3 @@ class TrainingConfig:
     min_learning_rate: float = 1e-6
     use_class_weights: bool = True
     random_state: int = 42
-
