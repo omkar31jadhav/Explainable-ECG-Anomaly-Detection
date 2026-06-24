@@ -76,5 +76,6 @@ def load_trained_model(model_path: str | Path = DEFAULT_MODEL_PATH):
     """Load a saved Keras model."""
 
     tf = _import_tensorflow()
-    return tf.keras.models.load_model(Path(model_path))
+    # Load without compiling to reduce startup overhead when only predicting.
+    return tf.keras.models.load_model(Path(model_path), compile=False)
 
