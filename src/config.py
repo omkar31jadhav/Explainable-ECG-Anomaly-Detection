@@ -13,6 +13,7 @@ MODELS_DIR = ROOT_DIR / "models"
 RESULTS_DIR = ROOT_DIR / "results"
 
 DEFAULT_MODEL_PATH = MODELS_DIR / "ecg_cnn.keras"
+DEFAULT_XGBOOST_MODEL_PATH = MODELS_DIR / "ecg_xgboost.joblib"
 DEFAULT_LABEL_ENCODER_PATH = MODELS_DIR / "label_encoder.joblib"
 DEFAULT_DATASET_CACHE_PATH = RESULTS_DIR / "mitbih_beat_dataset.npz"
 

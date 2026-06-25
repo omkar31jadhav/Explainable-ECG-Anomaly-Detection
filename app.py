@@ -16,6 +16,8 @@ from dataclasses import asdict
 from src.config import DataConfig
 from src.data_loader import MITBIHDataLoader
 from src.predict import ECGPredictor
+from src.predict_xgboost import FEATURE_NAMES, XGBoostPredictor, extract_ecg_features
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from src.preprocessing import (
     extract_heartbeat_windows,
     prepare_beat_features,
@@ -115,6 +117,215 @@ def _safe_float(x):
         return float(x)
     except Exception:
         return np.nan
+
+
+def _normalize_label(label: str | None) -> str:
+    if label is None:
+        return "Unknown"
+    normalized = str(label).strip()
+    return normalized if normalized else "Unknown"
+
+
+def _is_anomalous_label(label: str | None) -> int:
+    return 0 if _normalize_label(label).lower() == "normal" else 1
+
+
+def _build_model_comparison_metrics(full_df: pd.DataFrame) -> tuple[pd.DataFrame, float] | None:
+    if "ground_truth_label" not in full_df.columns:
+        return None
+
+    ground_truth = full_df["ground_truth_label"].astype(object).map(_normalize_label)
+    valid_mask = ground_truth != "Unknown"
+    if valid_mask.sum() == 0:
+        return None
+
+    true_labels = ground_truth[valid_mask].astype(str).tolist()
+    pred_cnn_labels = full_df.loc[valid_mask, "predicted_class"].astype(object).map(_normalize_label).tolist()
+    pred_xgb_labels = full_df.loc[valid_mask, "predicted_class_xgb"].astype(object).map(_normalize_label).tolist()
+    binary_true = [1 if _is_anomalous_label(label) else 0 for label in true_labels]
+    binary_pred_cnn = [1 if _is_anomalous_label(label) else 0 for label in pred_cnn_labels]
+    binary_pred_xgb = [1 if _is_anomalous_label(label) else 0 for label in pred_xgb_labels]
+
+    labels = sorted(set(true_labels + pred_cnn_labels + pred_xgb_labels))
+
+    def _model_metrics(pred_labels: list[str]) -> dict[str, float]:
+        accuracy = float(accuracy_score(true_labels, pred_labels))
+        macro = precision_recall_fscore_support(
+            true_labels,
+            pred_labels,
+            labels=labels,
+            average="macro",
+            zero_division=0,
+        )
+        binary = precision_recall_fscore_support(
+            binary_true,
+            [1 if _is_anomalous_label(label) else 0 for label in pred_labels],
+            average="binary",
+            zero_division=0,
+        )
+        return {
+            "accuracy": accuracy,
+            "binary_precision": float(binary[0]),
+            "binary_recall": float(binary[1]),
+            "binary_f1": float(binary[2]),
+            "macro_precision": float(macro[0]),
+            "macro_recall": float(macro[1]),
+            "macro_f1": float(macro[2]),
+        }
+
+    metrics = [
+        {"model": "CNN", **_model_metrics(pred_cnn_labels)},
+        {"model": "XGBoost", **_model_metrics(pred_xgb_labels)},
+    ]
+    agreement = float(np.mean(np.asarray(binary_pred_cnn, dtype=int) == np.asarray(binary_pred_xgb, dtype=int)))
+    return pd.DataFrame.from_records(metrics).set_index("model"), agreement
+
+
+def _plot_model_comparison_metrics(metrics_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    metric_keys = ["accuracy", "binary_f1", "macro_f1"]
+    for metric in metric_keys:
+        fig.add_trace(
+            go.Bar(
+                name=metric.replace("_", " ").title(),
+                x=metrics_df.index.tolist(),
+                y=metrics_df[metric].tolist(),
+            )
+        )
+    fig.update_layout(
+        barmode="group",
+        title="Performance comparison across models",
+        yaxis=dict(title="Score", range=[0.0, 1.0]),
+        height=340,
+        margin=dict(l=20, r=20, t=45, b=20),
+    )
+    return fig
+
+
+def _build_gradcam_summary(
+    heartbeat_window_200: np.ndarray,
+    predictor,
+    data_config: DataConfig,
+    target_class_index: int,
+) -> tuple[np.ndarray, dict[str, float]]:
+    try:
+        from pyache.xai import grad_cam_1d
+    except Exception:
+        grad_cam_1d = None
+
+    try:
+        X = prepare_beat_features(
+            np.asarray(heartbeat_window_200, dtype=np.float32)[np.newaxis, :],
+            standardize=data_config.standardize_beats,
+            add_channel_axis=True,
+        )
+        if grad_cam_1d is not None:
+            importance = grad_cam_1d(predictor.model, X, class_idx=target_class_index)
+        else:
+            raise RuntimeError("Grad-CAM unavailable")
+    except Exception:
+        importance = _gradient_saliency_for_input(
+            heartbeat_window_200=heartbeat_window_200,
+            model=predictor.model,
+            target_class_index=target_class_index,
+            data_config=data_config,
+        )
+
+    values = np.asarray(importance, dtype=np.float32)
+    sorted_values = np.sort(values)
+    top_10pct = sorted_values[int(max(1, len(sorted_values) * 0.1)) :]
+    stats = {
+        "mean_importance": float(np.mean(values)) if values.size else 0.0,
+        "max_importance": float(np.max(values)) if values.size else 0.0,
+        "top_10pct_mean": float(np.mean(top_10pct)) if top_10pct.size else 0.0,
+        "high_importance_pct": float(np.mean(values > 0.5)) if values.size else 0.0,
+    }
+    return values, stats
+
+
+def _build_xgb_shap_summary_figure(
+    beat_window: np.ndarray,
+    xgb_predictor: XGBoostPredictor,
+    feature_names: list[str] = FEATURE_NAMES,
+) -> go.Figure | None:
+    if xgb_predictor._model is None:
+        return None
+    try:
+        import shap
+    except Exception:
+        return None
+
+    beat = np.asarray(beat_window, dtype=np.float32)
+    if beat.ndim == 2 and beat.shape[-1] == 1:
+        beat = beat[..., 0]
+    features = extract_ecg_features(beat[np.newaxis, :])
+    if features.shape[0] == 0:
+        return None
+
+    try:
+        explainer = shap.TreeExplainer(xgb_predictor._model)
+    except Exception:
+        try:
+            explainer = shap.Explainer(xgb_predictor._model)
+        except Exception:
+            return None
+
+    shap_values = explainer(features)
+    if hasattr(shap_values, "values"):
+        shap_vals = shap_values.values
+    else:
+        shap_vals = shap_values
+    shap_arr = np.asarray(shap_vals)
+    if shap_arr.ndim == 3:
+        shap_feature_importance = np.mean(np.abs(shap_arr), axis=(0, 1))
+    elif shap_arr.ndim == 2:
+        shap_feature_importance = np.mean(np.abs(shap_arr), axis=0)
+    elif shap_arr.ndim == 1:
+        shap_feature_importance = np.abs(shap_arr)
+    else:
+        return None
+
+    if len(feature_names) != len(shap_feature_importance):
+        feature_names = [f"feature_{i}" for i in range(len(shap_feature_importance))]
+
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=feature_names,
+                y=shap_feature_importance.tolist(),
+                marker_color="#2a9d8f",
+            )
+        ]
+    )
+    fig.update_layout(
+        title="XGBoost SHAP feature importance",
+        xaxis_title="Feature",
+        yaxis_title="Mean |SHAP value|",
+        height=360,
+        margin=dict(l=20, r=20, t=45, b=60),
+    )
+    return fig
+
+
+def _collect_selected_beat_windows(
+    df: pd.DataFrame,
+    extracted_root: Path,
+    data_config: DataConfig,
+    max_samples: int = 8,
+) -> np.ndarray:
+    windows = []
+    for _, row in df.head(max_samples).iterrows():
+        try:
+            heartbeat, _ = _discover_waveform_for_beat(
+                extracted_root=extracted_root,
+                record_name=str(row["record_name"]),
+                beat_index=int(row["beat_index"]),
+                data_config=data_config,
+            )
+            windows.append(np.asarray(heartbeat, dtype=np.float32))
+        except Exception:
+            continue
+    return np.stack(windows) if windows else np.empty((0, data_config.window_size), dtype=np.float32)
 
 
 def _ensure_uploaded_zip_extract(tmp_dir: Path, uploaded_bytes: bytes) -> Path:
@@ -268,6 +479,14 @@ def _get_predictor() -> ECGPredictor:
                 self.is_dummy = True
 
         return _DummyPredictor()
+
+
+@st.cache_resource(show_spinner=False)
+def _get_xgboost_predictor() -> XGBoostPredictor:
+    try:
+        return XGBoostPredictor()
+    except Exception:
+        return XGBoostPredictor(model=None)
 
 
 def _predict_record_heartbeats(
@@ -486,6 +705,7 @@ def _predict_dataset_heartbeats(
     beats_per_record: int = BEATS_PER_RECORD,
     progress_callback=None,
     predictor=None,
+    xgb_predictor=None,
 ) -> tuple[pd.DataFrame, list[dict]]:
     all_beats: list[np.ndarray] = []
     all_rows: list[dict] = []
@@ -581,8 +801,16 @@ def _predict_dataset_heartbeats(
 
     # Use a single shared predictor instance (preloaded outside when possible)
     predictor = predictor if predictor is not None else _get_predictor()
+    xgb_predictor = xgb_predictor if xgb_predictor is not None else _get_xgboost_predictor()
     if progress_callback is not None:
         progress_callback(0.65)
+
+    # Build XGBoost features for the same extracted beat windows.
+    try:
+        X_features = extract_ecg_features(X)
+    except Exception:
+        X_features = np.zeros((X.shape[0], 13), dtype=np.float32)
+
     # Use optimized batch size for speed: smaller batches on CPU, larger on GPU
     # For fast mode with 1 beat per record, we typically have 5-10 samples max
     batch_size = int(min(32, max(1, X.shape[0])))
@@ -641,16 +869,32 @@ def _predict_dataset_heartbeats(
     pred_idx = np.argmax(probs, axis=1)
     confidence = np.max(probs, axis=1)
 
-    for row, class_idx, score in zip(all_rows, pred_idx, confidence):
+    xgb_probs = xgb_predictor.predict_proba(X_features)
+    xgb_classes = xgb_predictor.label_encoder.classes_
+    xgb_normal_idx = _discover_normal_index(xgb_classes)
+    if xgb_normal_idx < 0:
+        xgb_normal_idx = 0
+    xgb_pred_idx = np.argmax(xgb_probs, axis=1)
+    xgb_confidence = np.max(xgb_probs, axis=1)
+
+    for row, class_idx, score, class_idx_xgb, score_xgb in zip(
+        all_rows,
+        pred_idx,
+        confidence,
+        xgb_pred_idx,
+        xgb_confidence,
+    ):
         is_anomaly = int(class_idx) != normal_idx
         row["predicted_class"] = str(classes[int(class_idx)])
         row["confidence"] = _safe_float(score)
         row["anomaly_score"] = _safe_float(score if is_anomaly else 1.0 - score)
-        row["anomaly_decision"] = (
-            "Anomalous"
-            if is_anomaly
-            else "Normal"
-        )
+        row["anomaly_decision"] = "Anomalous" if is_anomaly else "Normal"
+
+        xgb_is_anomaly = int(class_idx_xgb) != xgb_normal_idx
+        row["predicted_class_xgb"] = str(xgb_classes[int(class_idx_xgb)])
+        row["confidence_xgb"] = _safe_float(score_xgb)
+        row["anomaly_score_xgb"] = _safe_float(score_xgb if xgb_is_anomaly else 1.0 - score_xgb)
+        row["anomaly_decision_xgb"] = "Anomalous" if xgb_is_anomaly else "Normal"
 
     if progress_callback is not None:
         progress_callback(1.0)
@@ -1332,11 +1576,27 @@ if detect_clicked:
                         else:
                             time_label.success("✅ Scan complete.")
 
-                    # Ensure predictor is loaded once and reused for the whole scan.
+                    # Ensure predictors are loaded once and reused for the whole scan.
                     try:
                         predictor = _get_predictor()
                     except Exception:
                         predictor = None
+                    try:
+                        xgb_predictor = _get_xgboost_predictor()
+                    except Exception:
+                        xgb_predictor = None
+
+                    if xgb_predictor is None or getattr(xgb_predictor, "is_dummy", False):
+                        st.warning(
+                            "XGBoost model artifact is not available or failed to load. "
+                            "Current XGBoost metrics are fallback estimates and may be inaccurate. "
+                            "Place a valid models/ecg_xgboost.joblib file in the project to compare real XGBoost performance."
+                        )
+                    else:
+                        st.success(
+                            "XGBoost model loaded successfully from models/ecg_xgboost.joblib. "
+                            "Dashboard will compare real XGBoost predictions against the CNN model."
+                        )
 
                     full_df, processing_errors = _predict_dataset_heartbeats(
                         list(discovered_record_names),
@@ -1345,6 +1605,7 @@ if detect_clicked:
                         beats_per_record=int(effective_beats_limit),
                         progress_callback=progress_callback,
                         predictor=predictor,
+                        xgb_predictor=xgb_predictor,
                     )
                     progress.progress(1.0)
                     time_label.success("✅ Scan complete.")
@@ -1370,8 +1631,11 @@ if detect_clicked:
                 if len(full_df):
                     is_anomaly = full_df["predicted_class"].astype(str).str.lower().ne("normal")
                     anomaly_df = full_df[is_anomaly].copy()
+                    xgb_is_anomaly = full_df["predicted_class_xgb"].astype(str).str.lower().ne("normal")
+                    xgb_anomaly_df = full_df[xgb_is_anomaly].copy()
                 else:
                     anomaly_df = pd.DataFrame()
+                    xgb_anomaly_df = pd.DataFrame()
 
                 # Show timing breakdown from last scan if available
                 last_timing = st.session_state.get("last_scan_timing")
@@ -1419,6 +1683,7 @@ if detect_clicked:
                     "normal_pct_records": float(normal_pct_records),
                     "anomaly_pct": float(anomaly_pct_records),
                     "anomaly_df": anomaly_df,
+                    "xgb_anomaly_df": xgb_anomaly_df,
                     "full_df": full_df,
                     "anomaly_record_details": pd.DataFrame(),
                     "processing_errors": processing_errors,
@@ -1450,6 +1715,24 @@ if "scan_results" in st.session_state:
                     width="stretch",
                     height=220,
                 )
+
+        metrics_result = _build_model_comparison_metrics(df)
+        if metrics_result is not None:
+            metrics_df, agreement = metrics_result
+            with st.expander("Overall model comparison metrics", expanded=True):
+                metric_cols = st.columns([1.2, 1.0])
+                metric_cols[0].dataframe(metrics_df.round(3), width="stretch", height=220)
+                metric_cols[1].plotly_chart(
+                    _plot_model_comparison_metrics(metrics_df),
+                    use_container_width=True,
+                )
+                st.caption(
+                    f"CNN vs XGBoost anomaly decision agreement: {agreement * 100:.1f}% on labeled beats."
+                )
+        else:
+            st.info(
+                "No ground truth labels were available for overall metric comparison."
+            )
 
         st.markdown("### Central ECG Review")
         selector_col, prediction_col, viz_col = st.columns([0.85, 1.05, 1.8])
@@ -1495,11 +1778,26 @@ if "scan_results" in st.session_state:
 
         with prediction_col:
             st.subheader("Prediction")
-            pred_class = str(row["predicted_class"])
-            confidence = float(row["confidence"])
-            is_anomaly = pred_class.lower() != "normal"
-            status_label = "Anomalous" if is_anomaly else "Normal"
-            st.metric(status_label, pred_class, f"{confidence * 100:.2f}% confidence")
+            cnn_class = str(row["predicted_class"])
+            cnn_confidence = float(row["confidence"])
+            xgb_class = str(row.get("predicted_class_xgb", "Unknown"))
+            xgb_confidence = float(row.get("confidence_xgb", 0.0))
+            cnn_is_anomaly = cnn_class.lower() != "normal"
+            xgb_is_anomaly = xgb_class.lower() != "normal"
+
+            metric_cols = st.columns([1, 1])
+            metric_cols[0].metric("CNN", cnn_class, f"{cnn_confidence * 100:.2f}%")
+            metric_cols[1].metric("XGBoost", xgb_class, f"{xgb_confidence * 100:.2f}%")
+
+            if cnn_is_anomaly and xgb_is_anomaly:
+                st.warning("Both models classify this beat as anomalous.")
+            elif cnn_is_anomaly:
+                st.info("CNN flags this beat as anomalous.")
+            elif xgb_is_anomaly:
+                st.info("XGBoost flags this beat as anomalous.")
+            else:
+                st.success("Both models classify this beat as normal.")
+
             total_records = int(scan.get("total_records_analyzed", len(scan["record_names"])))
             anomalous_records = int(scan.get("anomalous_records", 0))
             normal_records = max(total_records - anomalous_records, 0)
@@ -1552,11 +1850,14 @@ if "scan_results" in st.session_state:
                     beat_index=int(selected_beat_index),
                     data_config=data_config,
                 )
+                pred_class = cnn_class
+                pred_confidence = cnn_confidence
                 show_explanation = st.checkbox(
                     "Generate explanation overlay",
                     value=False,
                     help="Turn on only when you need the interpretability heatmap; it is slower.",
                 )
+                gradcam_stats = None
                 if show_explanation:
                     predictor = _get_predictor()
                     classes = predictor.label_encoder.classes_
@@ -1575,6 +1876,12 @@ if "scan_results" in st.session_state:
                         saliency=saliency,
                         title=f"Record {selected_record}, beat {selected_beat_index}: {pred_class}",
                     )
+                    _, gradcam_stats = _build_gradcam_summary(
+                        heartbeat_window_200=heartbeat,
+                        predictor=predictor,
+                        data_config=data_config,
+                        target_class_index=target_idx,
+                    )
                 else:
                     fig = _plot_simple_timeseries(
                         heartbeat,
@@ -1583,16 +1890,31 @@ if "scan_results" in st.session_state:
                 fig.update_layout(height=220)
                 st.plotly_chart(fig, use_container_width=True)
 
+                if gradcam_stats is not None:
+                    stats_cols = st.columns(4)
+                    stats_cols[0].metric("Grad-CAM mean", f"{gradcam_stats['mean_importance']:.3f}")
+                    stats_cols[1].metric("Max importance", f"{gradcam_stats['max_importance']:.3f}")
+                    stats_cols[2].metric("Top 10% mean", f"{gradcam_stats['top_10pct_mean']:.3f}")
+                    stats_cols[3].metric("High importance %", f"{gradcam_stats['high_importance_pct'] * 100:.1f}%")
+
                 st.session_state["selected_for_xai"] = {
                     "record_name": selected_record,
                     "beat_index": int(selected_beat_index),
                     "heartbeat": heartbeat,
                     "predicted_class": pred_class,
-                    "confidence": confidence,
+                    "confidence": pred_confidence,
                     "data_config": data_config,
                 }
                 if ground_truth is not None:
                     st.caption(f"Ground truth label: {ground_truth}")
+
+                xgb_predictor = _get_xgboost_predictor()
+                shap_fig = _build_xgb_shap_summary_figure(heartbeat, xgb_predictor)
+                if shap_fig is not None:
+                    st.subheader("XGBoost SHAP summary")
+                    st.plotly_chart(shap_fig, use_container_width=True)
+                else:
+                    st.info("XGBoost SHAP summary is not available for the current run.")
             except Exception as e:
                 st.error(f"Visualization or explanation failed: {type(e).__name__}: {e}")
 

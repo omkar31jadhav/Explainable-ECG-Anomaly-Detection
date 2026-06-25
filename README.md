@@ -35,6 +35,20 @@ The objective of this project is to:
 
 ---
 
+# Environment Setup
+
+For macOS, XGBoost may require the OpenMP runtime:
+
+```bash
+brew install libomp
+```
+
+Then install Python dependencies in the project environment:
+
+```bash
+pip install -r requirements.txt
+```
+
 # Dataset
 
 Dataset: MIT-BIH Arrhythmia Database (PhysioNet)
